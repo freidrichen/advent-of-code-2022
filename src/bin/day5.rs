@@ -1,12 +1,19 @@
-use lazy_static::lazy_static;
-use regex::Regex;
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::complete,
+    character::complete::{alpha1, newline, space1},
+    multi::separated_list1,
+    sequence::delimited,
+    IResult,
+};
 use std::fs;
 
 const SAMPLE_INPUT: &str = "
-    [D]
-[N] [C]
+    [D]    
+[N] [C]    
 [Z] [M] [P]
- 1   2   3
+ 1   2   3 
 
 move 1 from 2 to 1
 move 3 from 1 to 3
@@ -14,76 +21,106 @@ move 2 from 2 to 1
 move 1 from 1 to 2
 ";
 
-fn parse_stacks(input: &str) -> Vec<Vec<char>> {
-    let count: usize = input
-        .lines()
-        .last()
-        .unwrap()
-        .trim()
-        .chars()
-        .last()
-        .unwrap()
-        .to_digit(10)
-        .unwrap() as usize;
-    let mut stacks: Vec<Vec<char>> = Vec::new();
-    for _ in 0..count {
-        stacks.push(Vec::new());
-    }
+fn krate(input: &str) -> IResult<&str, Option<&str>> {
+    let (input, c) = alt((tag("   "), delimited(tag("["), alpha1, tag("]"))))(input)?;
+    let c = match c {
+        "   " => None,
+        c => Some(c),
+    };
+    Ok((input, c))
+}
+fn crates_line(input: &str) -> IResult<&str, Vec<Option<&str>>> {
+    separated_list1(tag(" "), krate)(input)
+}
+fn crates_lines(input: &str) -> IResult<&str, Vec<Vec<Option<&str>>>> {
+    separated_list1(newline, crates_line)(input)
+}
+fn stacks(input: &str) -> IResult<&str, Vec<Vec<&str>>> {
+    let (input, stacks_lines) = crates_lines(input)?;
 
-    for line in input.lines() {
-        let chars = line.chars();
-        let blocks = chars.skip(1).step_by(4);
-        for (i, block) in blocks.enumerate() {
-            if block == '1' {
-                break;
+    let mut stacks: Vec<Vec<&str>> = Vec::new();
+    for stacks_line in stacks_lines {
+        if stacks.is_empty() {
+            for _ in 0..stacks_line.len() {
+                stacks.push(Vec::new());
             }
-            if block == ' ' {
-                continue;
-            }
-            stacks[i].push(block)
+        }
+        for (i, krate) in stacks_line
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.map(|c| (i, c)))
+        {
+            stacks[i].push(krate)
         }
     }
 
     for stack in &mut stacks {
         stack.reverse();
     }
-    stacks
+    Ok((input, stacks))
 }
 
-fn parse_instructions(input: &str) -> Vec<(usize, usize, usize)> {
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"(?m)^move (\d+) from (\d+) to (\d+)$").unwrap();
-    }
-    let mut instructions = Vec::new();
-    for cap in RE.captures_iter(input) {
-        let count: usize = (&cap[1]).parse().unwrap();
-        let from: usize = (&cap[2]).parse::<usize>().unwrap() - 1;
-        let to: usize = (&cap[3]).parse::<usize>().unwrap() - 1;
-        instructions.push((count, from, to))
-    }
-    instructions
+fn numbers(input: &str) -> IResult<&str, Vec<u32>> {
+    let (input, _) = tag(" ")(input)?;
+    let (input, res) = separated_list1(space1, complete::u32)(input)?;
+    let (input, _) = tag(" ")(input)?;
+    Ok((input, res))
+}
+
+struct Instruction {
+    count: usize,
+    from: usize,
+    to: usize,
+}
+
+fn instruction(input: &str) -> IResult<&str, Instruction> {
+    let (input, _) = tag("move ")(input)?;
+    let (input, count) = complete::u32(input)?;
+    let (input, _) = tag(" from ")(input)?;
+    let (input, from) = complete::u32(input)?;
+    let (input, _) = tag(" to ")(input)?;
+    let (input, to) = complete::u32(input)?;
+    Ok((
+        input,
+        Instruction {
+            count: count as usize,
+            from: from as usize - 1,
+            to: to as usize - 1,
+        },
+    ))
+}
+fn instructions(input: &str) -> IResult<&str, Vec<Instruction>> {
+    separated_list1(newline, instruction)(input)
+}
+
+fn parse(input: &str) -> IResult<&str, (Vec<Vec<&str>>, Vec<Instruction>)> {
+    let (input, stacks) = stacks(input)?;
+    let (input, _) = newline(input)?;
+    let (input, _numbers) = numbers(input)?;
+    let (input, _) = newline(input)?;
+    let (input, _) = newline(input)?;
+    let (input, instructions) = instructions(input)?;
+    Ok((input, (stacks, instructions)))
 }
 
 fn trim(input: &str) -> &str {
     input.trim_start_matches("\n").trim_end_matches("\n")
 }
 
-fn eprint_stacks(stacks: &Vec<Vec<char>>) {
-    for (i, stack) in stacks.iter().enumerate() {
-        eprint!("{i} ");
-        for block in stack {
-            eprint!("{block}");
-        }
-        eprintln!("");
-    }
-}
+// fn eprint_stacks(stacks: &Vec<Vec<&str>>) {
+//     for (i, stack) in stacks.iter().enumerate() {
+//         eprint!("{i} ");
+//         for block in stack {
+//             eprint!("{block}");
+//         }
+//         eprintln!("");
+//     }
+// }
 
 fn part1(input: &str) -> String {
-    let (stacks, instructions) = input.split_once("\n\n").unwrap();
-    let mut stacks = parse_stacks(stacks);
-    let instructions = parse_instructions(instructions);
+    let (_input, (mut stacks, instructions)) = parse(input).unwrap();
 
-    for (count, from, to) in instructions {
+    for Instruction { count, from, to } in instructions {
         // eprint_stacks(&stacks);
         // eprintln!("Move {count} from {from} to {to}");
         for _ in 0..count {
@@ -91,7 +128,6 @@ fn part1(input: &str) -> String {
             stacks[to].push(v);
         }
     }
-    // eprint_stacks(&stacks);
 
     let mut res = Vec::new();
     for mut stack in stacks {
@@ -101,23 +137,15 @@ fn part1(input: &str) -> String {
 }
 
 fn part2(input: &str) -> String {
-    let (stacks, instructions) = input.split_once("\n\n").unwrap();
-    let mut stacks = parse_stacks(stacks);
-    let instructions = parse_instructions(instructions);
+    let (_input, (mut stacks, instructions)) = parse(input).unwrap();
 
-    for (count, from, to) in instructions {
+    for Instruction { count, from, to } in instructions {
         // eprint_stacks(&stacks);
         // eprintln!("Move {count} from {from} to {to}");
-        let mut cache = Vec::new();
-        for _ in 0..count {
-            cache.push(stacks[from].pop().unwrap());
-        }
-        cache.reverse();
-        for v in cache {
-            stacks[to].push(v);
-        }
+        let len = stacks[from].len();
+        let cache: Vec<_> = stacks[from].drain(len - count..).collect();
+        stacks[to].extend(cache);
     }
-    // eprint_stacks(&stacks);
 
     let mut res = Vec::new();
     for mut stack in stacks {
